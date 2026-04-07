@@ -40,6 +40,7 @@ type Server struct {
 	store      *store.Store
 	mux        *http.ServeMux
 	port       int
+	bind       string // bind address (default "127.0.0.1")
 	listen     func(network, address string) (net.Listener, error)
 	serve      func(net.Listener, http.Handler) error
 	onWrite    func() // called after successful local writes (for autosync notification)
@@ -47,10 +48,16 @@ type Server struct {
 }
 
 func New(s *store.Store, port int) *Server {
-	srv := &Server{store: s, port: port, listen: net.Listen, serve: http.Serve}
+	srv := &Server{store: s, port: port, bind: "127.0.0.1", listen: net.Listen, serve: http.Serve}
 	srv.mux = http.NewServeMux()
 	srv.routes()
 	return srv
+}
+
+// SetBind overrides the default bind address (127.0.0.1).
+// Use "0.0.0.0" to listen on all interfaces.
+func (s *Server) SetBind(addr string) {
+	s.bind = addr
 }
 
 // SetOnWrite configures a callback invoked after every successful local write.
@@ -72,7 +79,7 @@ func (s *Server) notifyWrite() {
 }
 
 func (s *Server) Start() error {
-	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
+	addr := fmt.Sprintf("%s:%d", s.bind, s.port)
 	listenFn := s.listen
 	if listenFn == nil {
 		listenFn = net.Listen

@@ -189,14 +189,23 @@ func main() {
 
 func cmdServe(cfg store.Config) {
 	port := 7437 // "ENGR" on phone keypad vibes
+	bind := "127.0.0.1"
 	if p := os.Getenv("ENGRAM_PORT"); p != "" {
 		if n, err := strconv.Atoi(p); err == nil {
 			port = n
 		}
 	}
+	if b := os.Getenv("ENGRAM_BIND"); b != "" {
+		bind = b
+	}
 	// Allow: engram serve 8080
-	if len(os.Args) > 2 {
-		if n, err := strconv.Atoi(os.Args[2]); err == nil {
+	for i := 2; i < len(os.Args); i++ {
+		if strings.HasPrefix(os.Args[i], "--bind=") {
+			bind = strings.TrimPrefix(os.Args[i], "--bind=")
+		} else if os.Args[i] == "--bind" && i+1 < len(os.Args) {
+			bind = os.Args[i+1]
+			i++
+		} else if n, err := strconv.Atoi(os.Args[i]); err == nil {
 			port = n
 		}
 	}
@@ -208,6 +217,7 @@ func cmdServe(cfg store.Config) {
 	defer s.Close()
 
 	srv := newHTTPServer(s, port)
+	srv.SetBind(bind)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -1575,7 +1585,10 @@ Usage:
   engram <command> [arguments]
 
 Commands:
-  serve [port]       Start HTTP API server (default: 7437)
+  serve [port] [--bind=ADDR]
+                     Start HTTP API server (default: 127.0.0.1:7437)
+                       --bind  Bind address (default: 127.0.0.1, use 0.0.0.0 for all interfaces)
+                       Also configurable via ENGRAM_BIND env var
   mcp [--tools=PROFILE] [--project=NAME] [--sse] [--port=N] [--base-url=URL]
                      Start MCP server (stdio by default; SSE over HTTP with --sse)
                        Profiles: agent (11 tools), admin (4 tools), all (default, 15)
@@ -1622,6 +1635,7 @@ Commands:
 Environment:
   ENGRAM_DATA_DIR    Override data directory (default: ~/.engram)
   ENGRAM_PORT        Override HTTP server port (default: 7437)
+  ENGRAM_BIND        Override HTTP server bind address (default: 127.0.0.1)
   ENGRAM_PROJECT     Override auto-detected project name for MCP server
 
 MCP Configuration (add to your agent's config):
