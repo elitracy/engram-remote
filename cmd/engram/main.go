@@ -3,7 +3,8 @@
 // Usage:
 //
 //	engram serve          Start HTTP + MCP server
-//	engram mcp            Start MCP server only (stdio transport)
+//	engram mcp            Start MCP server (stdio transport, default)
+//	engram mcp --sse      Start MCP server over HTTP/SSE (for remote agents)
 //	engram search <query> Search memories from CLI
 //	engram save           Save a memory from CLI
 //	engram context        Show recent context
@@ -223,9 +224,12 @@ func cmdServe(cfg store.Config) {
 }
 
 func cmdMCP(cfg store.Config) {
-	// Parse --tools and --project flags
+	// Parse --tools, --project, --sse, --port, and --base-url flags
 	toolsFilter := ""
 	projectOverride := ""
+	sseMode := false
+	ssePort := 3001
+	baseURL := ""
 	for i := 2; i < len(os.Args); i++ {
 		if strings.HasPrefix(os.Args[i], "--tools=") {
 			toolsFilter = strings.TrimPrefix(os.Args[i], "--tools=")
@@ -236,6 +240,22 @@ func cmdMCP(cfg store.Config) {
 			projectOverride = strings.TrimPrefix(os.Args[i], "--project=")
 		} else if os.Args[i] == "--project" && i+1 < len(os.Args) {
 			projectOverride = os.Args[i+1]
+			i++
+		} else if os.Args[i] == "--sse" {
+			sseMode = true
+		} else if strings.HasPrefix(os.Args[i], "--port=") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(os.Args[i], "--port=")); err == nil {
+				ssePort = n
+			}
+		} else if os.Args[i] == "--port" && i+1 < len(os.Args) {
+			if n, err := strconv.Atoi(os.Args[i+1]); err == nil {
+				ssePort = n
+			}
+			i++
+		} else if strings.HasPrefix(os.Args[i], "--base-url=") {
+			baseURL = strings.TrimPrefix(os.Args[i], "--base-url=")
+		} else if os.Args[i] == "--base-url" && i+1 < len(os.Args) {
+			baseURL = os.Args[i+1]
 			i++
 		}
 	}
@@ -265,6 +285,33 @@ func cmdMCP(cfg store.Config) {
 
 	allowlist := resolveMCPTools(toolsFilter)
 	mcpSrv := newMCPServerWithConfig(s, mcpCfg, allowlist)
+
+	if sseMode {
+		addr := fmt.Sprintf("0.0.0.0:%d", ssePort)
+		if baseURL == "" {
+			baseURL = fmt.Sprintf("http://localhost:%d", ssePort)
+		}
+		sseSrv := mcpserver.NewSSEServer(mcpSrv, mcpserver.WithBaseURL(baseURL))
+		log.Printf("[engram] MCP SSE server listening on %s (base URL: %s)", addr, baseURL)
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- sseSrv.Start(addr)
+		}()
+
+		select {
+		case <-ctx.Done():
+			log.Println("[engram] shutting down MCP SSE server")
+		case err := <-errCh:
+			if err != nil {
+				fatal(err)
+			}
+		}
+		return
+	}
 
 	if err := serveMCP(mcpSrv); err != nil {
 		fatal(err)
@@ -1529,12 +1576,17 @@ Usage:
 
 Commands:
   serve [port]       Start HTTP API server (default: 7437)
-  mcp [--tools=PROFILE] [--project=NAME]
-                     Start MCP server (stdio transport, for any AI agent)
+  mcp [--tools=PROFILE] [--project=NAME] [--sse] [--port=N] [--base-url=URL]
+                     Start MCP server (stdio by default; SSE over HTTP with --sse)
                        Profiles: agent (11 tools), admin (4 tools), all (default, 15)
                        Combine: --tools=agent,admin or pick individual tools
-                       --project  Override detected project name (default: git remote → cwd)
-                       Example: engram mcp --tools=agent
+                       --project   Override detected project name (default: git remote → cwd)
+                       --sse       Serve over HTTP/SSE instead of stdio (for remote agents)
+                       --port      Port for SSE server (default: 3001)
+                       --base-url  Public base URL for SSE server (default: http://localhost:PORT)
+                       Examples:
+                         engram mcp --tools=agent
+                         engram mcp --sse --port=3001 --base-url=http://homeserver:3001
   tui                Launch interactive terminal UI
   search <query>     Search memories [--type TYPE] [--project PROJECT] [--scope SCOPE] [--limit N]
   save <title> <msg> Save a memory  [--type TYPE] [--project PROJECT] [--scope SCOPE]
